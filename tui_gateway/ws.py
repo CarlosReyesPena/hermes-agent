@@ -317,6 +317,33 @@ def _disable_nagle(ws: Any) -> None:
         _log.debug("ws TCP_NODELAY skip: %s", exc)
 
 
+def build_gateway_ready_payload(
+    skin: dict,
+    *,
+    change_events: bool = True,
+    heartbeat: bool = False,
+) -> dict:
+    """Delegates to ``tui_gateway.entry`` so both transports emit one payload.
+
+    Defining a second, narrower copy here is what let the WS sidecar drop
+    ``replay_epoch`` (or the turn-recovery capability) independently of the
+    stdio path. One implementation, one contract.
+
+    Imported lazily: ``entry`` pulls in the full CLI/agent stack, and importing
+    it at module scope would make the WS sidecar pay that cost — and risk an
+    import cycle — on every load.
+    """
+    from tui_gateway.entry import (
+        build_gateway_ready_payload as _entry_build_gateway_ready_payload,
+    )
+
+    return _entry_build_gateway_ready_payload(
+        skin,
+        change_events=change_events,
+        heartbeat=heartbeat,
+    )
+
+
 async def handle_ws(
     ws: Any,
     *,
@@ -375,15 +402,11 @@ async def handle_ws(
                     # change_events: this backend broadcasts pet.changed /
                     # cron.changed / sessions.changed, so clients can demote
                     # their legacy polls to slow backstops.
-                    "payload": {
-                        "skin": skin_payload,
-                        "change_events": True,
-                        "heartbeat": True,
-                        # Replay-contract process identity: lets reconnecting
-                        # clients detect a backend restart and reset their
-                        # per-session seq watermarks (see event_replay).
-                        "replay_epoch": replay_epoch(),
-                    },
+                    "payload": build_gateway_ready_payload(
+                        skin_payload,
+                        change_events=True,
+                        heartbeat=True,
+                    ),
                 },
             }
         )

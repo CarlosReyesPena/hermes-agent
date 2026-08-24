@@ -419,6 +419,33 @@ def ensure_mcp_discovery_started() -> None:
         )
 
 
+def build_gateway_ready_payload(
+    skin: dict,
+    *,
+    change_events: bool = True,
+    heartbeat: bool = False,
+) -> dict:
+    """Build the ``gateway.ready`` payload, including turn-recovery capability.
+
+    ``heartbeat`` is advertised only by the WS sidecar (handle_ws), which is the
+    transport that actually sends heartbeats; the stdio TUI leaves it off.
+
+    ``replay_epoch`` is part of the upstream WS replay contract: a reconnecting
+    client compares it to detect a backend restart and reset its per-session
+    seq watermarks. It is emitted here — rather than at each call site — so the
+    turn-recovery capability and the replay contract cannot drift apart again;
+    dropping either one silently degrades a client to legacy transport.
+    """
+    base: dict = {
+        "skin": skin,
+        "change_events": change_events,
+        "replay_epoch": replay_epoch(),
+    }
+    if heartbeat:
+        base["heartbeat"] = True
+    return server._turn_recovery_runtime.ready_payload(base)
+
+
 def main():
     _install_sidecar_publisher()
 
@@ -457,13 +484,7 @@ def main():
         "params": {
             "type": "gateway.ready",
             # change_events: see tui_gateway/ws.py — clients demote legacy polls.
-            # replay_epoch: restart detection for the WS replay contract (the
-            # stdio TUI ignores it).
-            "payload": {
-                "skin": resolve_skin(),
-                "change_events": True,
-                "replay_epoch": replay_epoch(),
-            },
+            "payload": build_gateway_ready_payload(resolve_skin()),
         },
     }):
         _log_exit("startup write failed (broken stdout pipe before first event)")
