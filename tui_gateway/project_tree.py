@@ -463,6 +463,9 @@ class _FolderIndex:
 
     def __init__(self, projects: list[dict]) -> None:
         self._by_path: dict[str, tuple[dict, int]] = {}
+        self._by_id: dict[str, dict] = {
+            str(project["id"]): project for project in projects if project.get("id")
+        }
         for project in projects:
             for folder in project.get("folders") or []:
                 segs = _comparison_segments(folder.get("path") or "")
@@ -474,6 +477,9 @@ class _FolderIndex:
                 existing = self._by_path.get(key)
                 if existing is None or depth > existing[1]:
                     self._by_path[key] = (project, depth)
+
+    def by_id(self, project_id: str) -> Optional[dict]:
+        return self._by_id.get(str(project_id or ""))
 
     def match(self, target: str) -> tuple[Optional[dict], int]:
         """Owning project for ``target`` by longest ancestor folder, + its depth."""
@@ -491,6 +497,13 @@ def _project_for_path(index: _FolderIndex, target: str) -> Optional[dict]:
 
 
 def _project_for_session(session: dict, index: _FolderIndex, resolve: Optional[Resolve]) -> Optional[dict]:
+    # User-assigned ownership is authoritative and intentionally independent
+    # from filesystem location. This is what makes Projects useful for ordinary
+    # chats rather than only coding sessions whose cwd happens to sit in a repo.
+    explicit = index.by_id(str(session.get("project_id") or ""))
+    if explicit is not None:
+        return explicit
+
     cwd = (session.get("cwd") or "").strip()
     if not cwd:
         return None
