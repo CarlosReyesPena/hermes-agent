@@ -15530,6 +15530,8 @@ def _project_tree_inputs(
     which already has sessions — avoiding the distinct-cwd scan + git probes on
     that per-turn path. One projects.db connection serves both reads.
     """
+    from tui_gateway import project_tree
+
     rows = db.list_sessions_rich(
         limit=session_limit,
         offset=0,
@@ -15567,10 +15569,19 @@ def _project_tree_inputs(
         # assignment in projects.db (the server-authoritative project store),
         # then project it onto the session rows consumed by the pure tree
         # builder.
+        runtime = globals().get("_turn_recovery_runtime")
+        mobile_to_stored = (
+            runtime.mobile_to_stored()
+            if runtime is not None
+            else {}
+        )
         for session in sessions:
             session_id = str(session.get("id") or "")
-            if session_id in assignments:
-                session["project_id"] = assignments[session_id]
+            project_id = project_tree.project_id_for_session(
+                session_id, assignments, mobile_to_stored
+            )
+            if project_id is not None:
+                session["project_id"] = project_id
         # backfill stays off the hot tree path — grouping uses the live resolver.
         discovered = (
             _discover_repos_payload(
