@@ -4936,7 +4936,7 @@ def _is_invalid_aux_response_error(exc: Exception) -> bool:
     return (
         "auxiliary " in msg
         and "llm returned invalid response" in msg
-        and "choices[0].message" in msg
+        and ("choices[0].message" in msg or "empty content" in msg)
     )
 
 
@@ -9442,6 +9442,38 @@ def _validate_llm_response(
             f"Expected object with .choices[0].message — check provider "
             f"adapter or custom endpoint compatibility."
         ) from exc
+
+    # Compression cannot use a reasoning-only/blank response as a summary.
+    # Validate this at the auxiliary boundary so the normal configured
+    # fallback_chain advances to the next provider.  Previously the blank
+    # response was accepted here and rejected later by ContextCompressor,
+    # which bypassed fallback_chain and retried only the (often exhausted)
+    # main chat model — the failure observed in #hermes-android.
+    if task == "compression":
+        message = choices[0].message
+        if isinstance(message, dict):
+            content = message.get("content")
+            tool_calls = message.get("tool_calls")
+        else:
+            content = getattr(message, "content", None)
+            tool_calls = getattr(message, "tool_calls", None)
+        if isinstance(content, str):
+            has_text = bool(content.strip())
+        elif isinstance(content, list):
+            has_text = any(
+                bool(
+                    (part.get("text") if isinstance(part, dict) else getattr(part, "text", ""))
+                    or (part.get("content") if isinstance(part, dict) else getattr(part, "content", ""))
+                )
+                for part in content
+            )
+        else:
+            has_text = bool(content)
+        if not has_text and not tool_calls:
+            raise RuntimeError(
+                "Auxiliary compression: LLM returned invalid response (empty content)"
+            )
+
     _record_relay_auxiliary_response_model(response)
     _complete_relay_auxiliary_call()
     return response

@@ -26,6 +26,7 @@ from agent.auxiliary_client import (
     _is_rate_limit_error,
     _is_model_not_found_error,
     _is_model_incompatible_error,
+    _is_invalid_aux_response_error,
     _refresh_nous_recommended_model,
     _normalize_aux_provider,
     _try_payment_fallback,
@@ -37,6 +38,7 @@ from agent.auxiliary_client import (
     _resolve_xai_oauth_for_aux,
     _CodexCompletionsAdapter,
     _pool_runtime_base_url,
+    _validate_llm_response,
 )
 
 
@@ -4217,10 +4219,29 @@ class TestCompressionFallbackContextFilter:
         assert _task_minimum_context_length(None) is None
 
 
+class TestCompressionEmptyResponseFallback:
+    """Empty summary content is a route failure, not a successful aux call."""
+
+    def test_compression_empty_content_is_invalid_but_tool_call_is_allowed(self):
+        empty = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="   ", tool_calls=None))]
+        )
+        with pytest.raises(RuntimeError, match="empty content") as exc_info:
+            _validate_llm_response(empty, "compression")
+        assert _is_invalid_aux_response_error(exc_info.value)
+
+        tool_only = SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(content="", tool_calls=[SimpleNamespace(id="call_1")])
+            )]
+        )
+        assert _validate_llm_response(tool_only, "compression") is tool_only
+
+
 class TestConfiguredFallbackCandidateFailures:
     """A failing configured candidate must not abort the remaining chain."""
 
-    def test_sync_chain_continues_after_connection_error(self, monkeypatch):
+    def test_sync_chain_continues_after_empty_compression_response(self, monkeypatch):
         from agent.auxiliary_client import call_llm
 
         primary = MagicMock(name="primary")
@@ -4229,7 +4250,11 @@ class TestConfiguredFallbackCandidateFailures:
         response = _DummyResponse()
 
         primary.chat.completions.create.side_effect = ConnectionError("primary refused")
-        first_fallback.chat.completions.create.side_effect = ConnectionError("fallback refused")
+        first_fallback.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(content="", tool_calls=None)
+            )]
+        )
         second_fallback.chat.completions.create.return_value = response
 
         entries = [
