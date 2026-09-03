@@ -15,7 +15,61 @@ The fix adds:
    with the full recovery path (hermes doctor, sqlite3 .recover, backups)
 """
 
+import asyncio
+from types import SimpleNamespace
+
 from pytest import fixture
+
+
+def test_session_db_warning_rechecks_recovery_before_notifying():
+    """A startup lock that has cleared must not produce a stale user warning."""
+    from gateway.run import GatewayRunner
+
+    runner = object.__new__(GatewayRunner)
+    runner._session_db_init_error = "OperationalError: database is locked"
+    runner.config = SimpleNamespace(platforms={})
+    recovery_attempts = []
+
+    def recover(*, raise_on_error=False):
+        recovery_attempts.append(raise_on_error)
+        runner._session_db_init_error = None
+        return object()
+
+    runner._open_session_db_for_active_scope = recover
+
+    asyncio.run(runner._send_session_db_warning_notifications())
+
+    assert recovery_attempts == [False]
+    assert runner._session_db_init_error is None
+
+
+def test_session_db_warning_waits_for_transient_lock_recovery(monkeypatch):
+    """A lock hidden by the shared-store wrapper gets a recovery grace period."""
+    from gateway.run import GatewayRunner
+
+    runner = object.__new__(GatewayRunner)
+    runner._session_db_init_error = "SessionStore SQLite handle unavailable"
+    runner.config = SimpleNamespace(platforms={})
+    recovery_attempts = []
+    outcomes = iter((None, None, object()))
+
+    def recover(*, raise_on_error=False):
+        recovery_attempts.append(raise_on_error)
+        outcome = next(outcomes)
+        if outcome is not None:
+            runner._session_db_init_error = None
+        return outcome
+
+    async def no_sleep(_seconds):
+        return None
+
+    runner._open_session_db_for_active_scope = recover
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    asyncio.run(runner._send_session_db_warning_notifications())
+
+    assert recovery_attempts == [False, False, False]
+    assert runner._session_db_init_error is None
 
 
 def test_format_turn_completion_corrupt_includes_recovery_options():
