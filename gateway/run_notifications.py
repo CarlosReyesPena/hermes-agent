@@ -723,6 +723,31 @@ class GatewayNotificationsMixin:
         if not error:
             return
         from hermes_state import _default_db_path, classify_persistence_error, format_session_db_unavailable
+        # A startup lock may clear while messaging adapters are connecting. Give lock
+        # failures a short grace period and re-open off the event loop before
+        # broadcasting, so users are warned only about a failure that is still
+        # active rather than one that already self-healed.
+        error_cause = classify_persistence_error(error)
+        shared_store_unavailable = "sqlite handle unavailable" in error.lower()
+        recovery_attempts = 15 if error_cause == "locked" or shared_store_unavailable else 1
+        for attempt in range(recovery_attempts):
+            try:
+                recovered = await asyncio.to_thread(
+                    self._open_session_db_for_active_scope
+                )
+                if recovered is not None:
+                    self._session_db_init_error = None
+                    return
+            except Exception:
+                logger.debug(
+                    "state.db recovery probe before warning failed", exc_info=True
+                )
+            if attempt + 1 < recovery_attempts:
+                await asyncio.sleep(1.0)
+
+        error = getattr(self, "_session_db_init_error", None)
+        if not error:
+            return
         if classify_persistence_error(error) == "corrupt":
             # Copy-pasteable, so name the real store (profiles / HERMES_HOME do not live under ~/.hermes).
             db_path = _default_db_path()
