@@ -6905,10 +6905,18 @@ def _ladder_provider_fallback(first_err: Exception, route: _LadderRoute):
         fb_client, fb_model, fb_label = _try_main_agent_model_fallback(
             resolved_provider, task, reason=reason, failed_model=_chain_failed_model)
     if fb_client is not None:
-        _record_route_info(route.route_info, _fallback_provider_from_label(fb_label), fb_model)
-        fb_resp = yield _LadderStep("fallback", (fb_client, fb_model, fb_label))
-        if fb_resp is not None:
-            return fb_resp
+        # Second pass: the candidate credential was stale and quarantined — walk the
+        # payment/discovery layer once more (unhealthy entries are skipped).
+        for _pass in range(2):
+            _record_route_info(route.route_info, _fallback_provider_from_label(fb_label), fb_model)
+            fb_resp = yield _LadderStep("fallback", (fb_client, fb_model, fb_label))
+            if fb_resp is not None:
+                return fb_resp
+            if _pass == 0:
+                fb_client, fb_model, fb_label = _try_payment_fallback(
+                    resolved_provider, task, reason="stale fallback credential")
+                if fb_client is None:
+                    break
     # All fallback layers exhausted — one user-visible warning, then re-raise.
     logger.warning(
         "Auxiliary %s%s: %s on %s and all fallbacks exhausted "
