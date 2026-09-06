@@ -4143,6 +4143,112 @@ class TestBulkDeleteSessionsEndpoint:
         )
 
 
+class TestBulkUpdateSessionsEndpoint:
+    """Tests for ``POST /api/sessions/bulk-update`` — the batch flag setter
+    backing the Android app's multi-select Pin / Archive actions.
+
+    It is the single missing sibling of ``bulk-delete``: the dashboard already
+    PATCHes one session's flags via ``/api/sessions/{id}``, but a multi-select
+    would otherwise fire N round-trips. This endpoint applies ``pinned`` /
+    ``archived`` (and ``hidden`` / ``unread``) across ``ids`` in one call.
+
+    Locks in:
+
+    1. Route-ordering: ``/api/sessions/bulk-update`` must shadow the templated
+       ``/api/sessions/{session_id}`` family below it.
+    2. Flags are applied across each session's compression lineage (same
+       semantics as the single-session PATCH, which exempts pins from the
+       auto-archive sweep).
+    3. The 500-ID cap is enforced.
+    4. Unknown ids are skipped, not invented.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _setup_test_client(self, monkeypatch, _isolate_hermes_home):
+        try:
+            from starlette.testclient import TestClient
+        except ImportError:
+            pytest.skip("fastapi/starlette not installed")
+
+        import hermes_state
+        from hermes_constants import get_hermes_home
+        from hermes_cli.web_server import app, _SESSION_HEADER_NAME, _SESSION_TOKEN
+
+        monkeypatch.setattr(
+            hermes_state, "DEFAULT_DB_PATH", get_hermes_home() / "state.db"
+        )
+
+        self.client = TestClient(app)
+        self.auth_client = TestClient(app)
+        self.auth_client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
+
+    def _seed(self, ids):
+        from hermes_state import SessionDB
+
+        db = SessionDB()
+        try:
+            for sid in ids:
+                db.create_session(session_id=sid, source="cli")
+        finally:
+            db.close()
+
+    def test_pins_and_archives_listed_sessions(self):
+        self._seed(["a", "b", "c"])
+        resp = self.auth_client.post(
+            "/api/sessions/bulk-update",
+            json={"ids": ["a", "b"], "pinned": True, "archived": True},
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "updated": 2}
+
+        from hermes_state import SessionDB
+
+        db = SessionDB()
+        try:
+            assert db.get_session("a")["pinned"] == 1
+            assert db.get_session("b")["archived"] == 1
+            assert db.get_session("c")["pinned"] == 0
+            assert db.get_session("c")["archived"] == 0
+        finally:
+            db.close()
+
+    def test_skips_unknown_ids(self):
+        self._seed(["a"])
+        resp = self.auth_client.post(
+            "/api/sessions/bulk-update",
+            json={"ids": ["a", "ghost"], "pinned": True},
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "updated": 1}
+
+    def test_requires_at_least_one_flag(self):
+        self._seed(["a"])
+        resp = self.auth_client.post(
+            "/api/sessions/bulk-update", json={"ids": ["a"]}
+        )
+        assert resp.status_code == 400
+
+    def test_route_order_not_shadowed_by_session_id(self):
+        resp = self.auth_client.post(
+            "/api/sessions/bulk-update", json={"ids": [], "pinned": True}
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body.get("ok") is True
+        assert "updated" in body, (
+            "If this assertion fails, /api/sessions/bulk-update is "
+            "being shadowed by /api/sessions/{session_id} — check "
+            "registration order in hermes_cli/web_server.py."
+        )
+
+    def test_cap_enforced(self):
+        resp = self.auth_client.post(
+            "/api/sessions/bulk-update",
+            json={"ids": ["x"] * 501, "pinned": True},
+        )
+        assert resp.status_code == 400
+
+
 class TestDeleteEmptySessionsEndpoint:
     """Tests for ``GET /api/sessions/empty/count`` and
     ``DELETE /api/sessions/empty`` — the bulk-delete endpoints backing

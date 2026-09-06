@@ -4448,6 +4448,23 @@ class TestSessionPinAndStaleArchive:
         assert db.set_session_pinned("s1", False) is True
         assert self._pinned(db, "s1") == 0
 
+    # ── bulk flag setter ──────────────────────────────────────────────────
+    def test_bulk_set_session_flags_applies_and_skips_unknown(self, db):
+        db.create_session(session_id="a", source="cli")
+        db.create_session(session_id="b", source="cli")
+        updated = db.bulk_set_session_flags(
+            ["a", "b", "ghost"], pinned=True, archived=True
+        )
+        assert updated == 2
+        assert db.get_session("a")["pinned"] == 1
+        assert db.get_session("a")["archived"] == 1
+        assert db.get_session("b")["pinned"] == 1
+
+    def test_bulk_set_session_flags_no_flags_is_noop(self, db):
+        db.create_session(session_id="a", source="cli")
+        assert db.bulk_set_session_flags(["a"]) == 0
+        assert db.get_session("a")["pinned"] == 0
+
 
 
     # ── pinned back-fill past the page window ─────────────────────────────

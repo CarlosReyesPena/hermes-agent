@@ -883,6 +883,40 @@ class SessionSessionsMixin:
         """Hide/unhide a session and its compression lineage from the default listing; still resumable."""
         return self._set_lineage_column("hidden", session_id, int(hidden))
 
+    def bulk_set_session_flags(
+        self,
+        session_ids: List[str],
+        *,
+        pinned: Optional[bool] = None,
+        archived: Optional[bool] = None,
+        hidden: Optional[bool] = None,
+        unread: Optional[bool] = None,
+    ) -> int:
+        """Apply optional flags to many sessions (and their compression lineages) in one call.
+
+        Unknown ids are skipped (a multi-select can race another tab's delete); the returned
+        count is the number of ids whose lineage was actually updated. Uses the same
+        per-flag semantics as the single-session setters, so pins stay exempt from the
+        auto-archive sweep and ``unread`` advances the ``last_read_at`` watermark.
+        """
+        flags = [f for f in (pinned, archived, hidden, unread) if f is not None]
+        if not flags:
+            return 0
+        updated = 0
+        for sid in {sid for sid in session_ids if isinstance(sid, str) and sid}:
+            touched = False
+            if pinned is not None:
+                touched = self.set_session_pinned(sid, pinned) or touched
+            if archived is not None:
+                touched = self.set_session_archived(sid, archived) or touched
+            if hidden is not None:
+                touched = self.set_session_hidden(sid, hidden) or touched
+            if unread is not None:
+                touched = self.set_session_read(sid, read=not unread) or touched
+            if touched:
+                updated += 1
+        return updated
+
     def set_session_read(self, session_id: str, read: bool = True) -> bool:
         """Mark read/unread across the compression lineage. ``last_read_at`` is a watermark: unread when
         activity postdates it (no write on the message path). NULL = never tracked = read; 0 = unread."""

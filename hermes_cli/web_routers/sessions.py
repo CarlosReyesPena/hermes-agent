@@ -21,7 +21,8 @@ from hermes_cli.web_deps import late
 from hermes_cli.web_server_gateway import _strip_session_list_rows
 from hermes_cli.web_server_sessions import _maybe_auto_archive_for_profile, _session_latest_descendant
 from hermes_cli.web_models import (
-    BulkDeleteSessions, SessionImport, SessionOwnerBackfill, SessionPrune, SessionRename)
+    BulkDeleteSessions, SessionBulkUpdate, SessionImport, SessionOwnerBackfill, SessionPrune,
+    SessionRename)
 from hermes_cli.web_routers._common import log as _log, http_failure
 from hermes_state import is_malformed_db_error
 from hermes_state_errors import is_transient_sqlite_error
@@ -404,6 +405,36 @@ async def bulk_delete_sessions_endpoint(body: BulkDeleteSessions):
     deleted = await asyncio.to_thread(
         _with_db, body.profile, lambda db: db.delete_sessions(body.ids), read_only=False)
     return {"ok": True, "deleted": deleted}
+
+
+@manage_router.post("/api/sessions/bulk-update")
+async def bulk_update_sessions_endpoint(body: SessionBulkUpdate):
+    """Apply ``pinned`` / ``archived`` / ``hidden`` / ``unread`` to every session
+    in ``body.ids`` in one call — the multi-select sibling of the single-session
+    PATCH. Unknown ids are skipped (``updated`` reports the real count); a body
+    with no flag at all is a 400 rather than a silent no-op.
+    """
+    if len(body.ids) > 500:
+        raise HTTPException(status_code=400, detail="ids must contain at most 500 entries")
+    flags = (body.pinned, body.archived, body.hidden, body.unread)
+    if all(flag is None for flag in flags):
+        raise HTTPException(
+            status_code=400,
+            detail="Nothing to update; provide 'pinned', 'archived', 'hidden', and/or 'unread'.",
+        )
+    updated = await asyncio.to_thread(
+        _with_db,
+        body.profile,
+        lambda db: db.bulk_set_session_flags(
+            body.ids,
+            pinned=body.pinned,
+            archived=body.archived,
+            hidden=body.hidden,
+            unread=body.unread,
+        ),
+        read_only=False,
+    )
+    return {"ok": True, "updated": updated}
 
 
 @manage_router.post("/api/sessions/import")

@@ -231,6 +231,18 @@ class BulkDeleteSessions(BaseModel):
     ids: List[str]
     profile: Optional[str] = None
 
+class SessionBulkUpdate(BaseModel):
+    """Batch flag setter (``POST /api/sessions/bulk-update``) — the multi-select
+    sibling of the single-session PATCH. Every flag is optional; a request with no
+    flag is a 400. ``profile`` scopes which state.db the ids live in, mirroring
+    the other session mutation bodies."""
+    ids: List[str]
+    pinned: Optional[bool] = None
+    archived: Optional[bool] = None
+    hidden: Optional[bool] = None
+    unread: Optional[bool] = None
+    profile: Optional[str] = None
+
 class SessionImport(BaseModel):
     sessions: List[Dict[str, Any]]
     profile: Optional[str] = None
