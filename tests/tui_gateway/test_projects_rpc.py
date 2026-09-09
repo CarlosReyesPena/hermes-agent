@@ -1012,3 +1012,43 @@ def test_assign_session_by_mobile_id_surfaces_in_project_sessions(tmp_path):
             assert [session["id"] for session in nested] == [stored]
         finally:
             runtime._bindings.pop(mobile, None)
+
+
+def test_assigned_session_without_cwd_still_hydrates_a_lane(tmp_path):
+    """A Project chat with no cwd (a Discord/replay chat, e.g.) is counted by
+    the tree but was dropped from every repo/lane, so the Project read as
+    ``sessionCount == N`` with zero hydrated rows — the Android app then
+    showed "No chats yet" despite an honest non-zero count. An assigned chat
+    must surface as a row even when it has no filesystem placement."""
+    home = tmp_path / "home"
+    folder = tmp_path / "repo"
+    folder.mkdir(parents=True)
+    project = _create_project(home, "Android", folder)
+
+    # Seed a message-bearing session with an EMPTY cwd.
+    from hermes_state import SessionDB
+
+    db = SessionDB(db_path=home / "state.db")
+    try:
+        db.create_session("discord-chat", "discord", cwd="")
+        db.append_message("discord-chat", "user", "a cwd-less project chat")
+    finally:
+        db.close()
+
+    with _serving_launch_profile(home):
+        _call(
+            "projects.assign_session",
+            {"project_id": project["id"], "session_id": "discord-chat"},
+        )
+        result = _call(
+            "projects.project_sessions", {"project_id": project["id"]}
+        )["project"]
+
+    assert result["sessionCount"] == 1
+    nested = [
+        session
+        for repo in result["repos"]
+        for group in repo["groups"]
+        for session in group["sessions"]
+    ]
+    assert [session["id"] for session in nested] == ["discord-chat"]

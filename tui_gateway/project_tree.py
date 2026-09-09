@@ -28,6 +28,13 @@ DEFAULT_BRANCH_LABEL = "main"
 NO_PROJECT_ID = "__no_project__"
 NO_PROJECT_LABEL = "Home"
 
+# Synthetic repo/lane for an owned session that has no filesystem placement
+# (a Discord/replay chat, e.g.). Such chats must still surface as rows inside
+# their project; dropping them left `sessionCount` non-zero with zero lanes.
+NO_CWD_REPO_KEY = "__general__"
+NO_CWD_LABEL = "General"
+NO_CWD_LANE_ID = "__no_cwd__"
+
 # Sibling probes when recovering a deleted worktree's parent repo (each miss is a git call).
 _MAX_SIBLING_PROBES = 4
 
@@ -248,7 +255,19 @@ def _build_repos(sessions: list[dict], resolve: Optional[Resolve], hydrate: bool
     for session in sessions:
         placement = _place_session(session, resolve)
         if not placement:
-            continue
+            # A session without a cwd has no filesystem placement, but it is
+            # still owned by the project (explicit assignment). Surface it in a
+            # stable "General" lane rather than silently dropping it, or the
+            # project counts it while showing no rows at all.
+            placement = {
+                "repo_key": NO_CWD_REPO_KEY,
+                "repo_label": NO_CWD_LABEL,
+                "lane_key": NO_CWD_LANE_ID,
+                "lane_label": NO_CWD_LABEL,
+                "lane_path": "",
+                "is_main": False,
+                "is_kanban": False,
+            }
         lane_identity = _lane_key(placement["lane_key"])
         if lane_identity not in lanes:
             group = dict(zip(_LANE_FIELDS, (placement[k] for k in _PLACEMENT_LANE_KEYS)))
