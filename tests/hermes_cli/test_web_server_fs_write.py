@@ -199,6 +199,38 @@ def test_fs_copy_directory_recursively(client, tmp_path):
     assert (source / "sub" / "file.txt").read_text() == "nested"
 
 
+def test_fs_copy_rejects_directory_inside_itself(client, tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+
+    response = client.post(
+        "/api/fs/copy",
+        json={
+            "source": str(source),
+            "destination": str(source / "nested-copy"),
+        },
+    )
+
+    assert response.status_code == 400
+    assert not (source / "nested-copy").exists()
+
+
+def test_fs_move_rejects_directory_inside_itself(client, tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+
+    response = client.post(
+        "/api/fs/move",
+        json={
+            "source": str(source),
+            "destination": str(source / "nested-move"),
+        },
+    )
+
+    assert response.status_code == 400
+    assert source.exists()
+
+
 def test_fs_write_endpoints_require_auth(tmp_path):
     """Write endpoints are the highest-risk surface; they must be auth-gated."""
     anonymous = TestClient(web_server.app)

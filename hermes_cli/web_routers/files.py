@@ -760,6 +760,11 @@ async def fs_delete(payload: FsDelete):
 def _fs_move_or_copy(source: Path, destination: Path, *, copy: bool) -> dict:
     if not source.exists():
         raise HTTPException(status_code=404, detail="Source not found")
+    if source.is_dir() and destination.is_relative_to(source):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot copy or move a directory inside itself",
+        )
     if destination.exists():
         raise HTTPException(status_code=409, detail="Destination already exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
