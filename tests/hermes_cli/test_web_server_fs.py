@@ -41,8 +41,16 @@ def test_fs_list_sorts_and_hides_noise(client, tmp_path):
     assert response.status_code == 200
     entries = response.json()["entries"]
     assert [entry["name"] for entry in entries] == ["a_dir", "a.txt", "b.txt"]
-    assert entries[0] == {"name": "a_dir", "path": str(root / "a_dir"), "isDirectory": True}
+    assert entries[0] == {
+        "name": "a_dir",
+        "path": str(root / "a_dir"),
+        "isDirectory": True,
+        "size": 0,
+    }
     assert all(entry["name"] not in {".git", "node_modules"} for entry in entries)
+    by_name = {entry["name"]: entry for entry in entries}
+    assert by_name["a.txt"]["size"] == 1
+    assert by_name["b.txt"]["size"] == 1
 
 
 def test_fs_read_data_url_rejects_over_cap(client, tmp_path, monkeypatch):

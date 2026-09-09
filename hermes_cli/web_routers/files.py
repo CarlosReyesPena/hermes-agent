@@ -614,10 +614,16 @@ async def fs_list(path: str):
             for entry in scan:
                 if entry.name in _FS_READDIR_HIDDEN:
                     continue
+                is_dir = entry.is_dir(follow_symlinks=False)
+                try:
+                    size = 0 if is_dir else entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    size = 0
                 entries.append({
                     "name": entry.name,
                     "path": str(target / entry.name),
-                    "isDirectory": entry.is_dir(follow_symlinks=False),
+                    "isDirectory": is_dir,
+                    "size": size,
                 })
         entries.sort(key=lambda item: (not item["isDirectory"], item["name"].lower(), item["name"]))
         return {"entries": entries}
