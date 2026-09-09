@@ -616,14 +616,18 @@ async def fs_list(path: str):
                     continue
                 is_dir = entry.is_dir(follow_symlinks=False)
                 try:
-                    size = 0 if is_dir else entry.stat(follow_symlinks=False).st_size
+                    st = entry.stat(follow_symlinks=False)
+                    size = 0 if is_dir else st.st_size
+                    modified_at = st.st_mtime
                 except OSError:
                     size = 0
+                    modified_at = 0.0
                 entries.append({
                     "name": entry.name,
                     "path": str(target / entry.name),
                     "isDirectory": is_dir,
                     "size": size,
+                    "modifiedAt": modified_at,
                 })
         entries.sort(key=lambda item: (not item["isDirectory"], item["name"].lower(), item["name"]))
         return {"entries": entries}
