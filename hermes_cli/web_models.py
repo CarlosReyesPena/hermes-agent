@@ -160,6 +160,26 @@ class FsWriteText(BaseModel):
     path: str
     content: str
 
+class FsMkdir(BaseModel):
+    path: str
+
+class FsUpload(BaseModel):
+    path: str
+    data_url: str
+    overwrite: bool = False
+
+class FsDelete(BaseModel):
+    path: str
+    recursive: bool = False
+
+class FsMove(BaseModel):
+    source: str
+    destination: str
+
+class FsCopy(BaseModel):
+    source: str
+    destination: str
+
 class GitPathBody(BaseModel):
     path: str
 

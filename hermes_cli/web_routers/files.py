@@ -30,7 +30,8 @@ from hermes_cli.web_server_files import (
     _fs_path, _managed_file_entry, _managed_response_meta, _resolve_managed_path,
 )
 from hermes_cli.web_models import (
-    ChatImageUpload, FsWriteText, ManagedDirectoryCreate, ManagedFileDelete, ManagedFileUpload,
+    ChatImageUpload, FsCopy, FsDelete, FsMkdir, FsMove, FsUpload, FsWriteText,
+    ManagedDirectoryCreate, ManagedFileDelete, ManagedFileUpload,
 )
 
 router = APIRouter()
@@ -686,6 +687,111 @@ async def fs_write_text(payload: FsWriteText):
         tmp.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Could not write file: {exc}")
     return {"ok": True, "path": str(target), "byteSize": len(text.encode("utf-8"))}
+
+
+def _fs_write_target(raw_path: str) -> Path:
+    """Resolve a free-form fs write target, denying sensitive credential paths.
+
+    Write endpoints share the read-side sensitive guard: an authenticated caller
+    must not overwrite, move or delete credential stores (`.env`, `config.yaml`,
+    auth tokens, mcp-tokens) through the file explorer.
+    """
+    target = _fs_path(raw_path)
+    if _is_sensitive_path(target):
+        raise HTTPException(status_code=403, detail="Access to sensitive files is not allowed")
+    return target
+
+
+def _fs_write_source(raw_path: str) -> Path:
+    target = _fs_path(raw_path)
+    if _is_sensitive_path(target):
+        raise HTTPException(status_code=403, detail="Access to sensitive files is not allowed")
+    return target
+
+
+@router.post("/api/fs/mkdir")
+async def fs_mkdir(payload: FsMkdir):
+    target = _fs_write_target(payload.path)
+    if target.exists() and not target.is_dir():
+        raise HTTPException(status_code=409, detail="A file already exists at that path")
+    with _io_errors("Directory is not writable", "Could not create directory"):
+        target.mkdir(parents=True, exist_ok=True)
+    return {"ok": True, "path": str(target)}
+
+
+@router.post("/api/fs/upload")
+async def fs_upload(payload: FsUpload):
+    from hermes_cli.web_server import _MANAGED_FILE_MAX_BYTES
+    target = _fs_write_target(payload.path)
+    if target.exists() and target.is_dir():
+        raise HTTPException(status_code=409, detail="A directory already exists at that path")
+    if target.exists() and not payload.overwrite:
+        raise HTTPException(status_code=409, detail="File already exists")
+    data, _mime_type = _decode_data_url(payload.data_url)
+    if len(data) > _MANAGED_FILE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="File is too large")
+    with _io_errors("File is not writable", "Could not write file"):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    return {"ok": True, "path": str(target)}
+
+
+@router.post("/api/fs/delete")
+async def fs_delete(payload: FsDelete):
+    target = _fs_write_source(payload.path)
+    if target.parent == target:
+        raise HTTPException(status_code=400, detail="Cannot delete the filesystem root")
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Path not found")
+    try:
+        if target.is_dir():
+            if payload.recursive:
+                shutil.rmtree(target)
+            else:
+                target.rmdir()
+        else:
+            target.unlink()
+    except OSError as exc:
+        status_code = 409 if target.is_dir() and not payload.recursive else 500
+        raise HTTPException(status_code=status_code, detail=f"Could not delete path: {exc}")
+    return {"ok": True, "path": str(target)}
+
+
+def _fs_move_or_copy(source: Path, destination: Path, *, copy: bool) -> dict:
+    if not source.exists():
+        raise HTTPException(status_code=404, detail="Source not found")
+    if destination.exists():
+        raise HTTPException(status_code=409, detail="Destination already exists")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if copy:
+            if source.is_dir():
+                shutil.copytree(source, destination)
+            else:
+                shutil.copy2(source, destination)
+        else:
+            shutil.move(str(source), str(destination))
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not {'copy' if copy else 'move'} path: {exc}")
+    return {"ok": True, "path": str(destination)}
+
+
+@router.post("/api/fs/move")
+async def fs_move(payload: FsMove):
+    source = _fs_write_source(payload.source)
+    destination = _fs_write_target(payload.destination)
+    if destination.parent == destination:
+        raise HTTPException(status_code=400, detail="Invalid destination")
+    return _fs_move_or_copy(source, destination, copy=False)
+
+
+@router.post("/api/fs/copy")
+async def fs_copy(payload: FsCopy):
+    source = _fs_write_source(payload.source)
+    destination = _fs_write_target(payload.destination)
+    if destination.parent == destination:
+        raise HTTPException(status_code=400, detail="Invalid destination")
+    return _fs_move_or_copy(source, destination, copy=True)
 
 
 async def _fs_download_path(path: str, profile: Optional[str], session_id: Optional[str]) -> Path:
